@@ -73,13 +73,14 @@ inferExpr env = \case
   Lam x e -> do
     targ <- freshTVar
     (t1, s1) <- inferExpr ((x, toScheme targ) : env) e
-    pure (tFun targ t1, s1)
+    pure (apply s1 $ tFun targ t1, s1)
   App e1 e2 -> do
     (t1, s1) <- inferExpr env e1
     (t2, s2) <- inferExpr env e2
     tv <- freshTVar
-    sbst <- unify (tFun (apply s2 t2) tv) $ apply s1 t1
-    pure (tv, mergeSubsts [sbst, s1, s2])
+    tvSbst <- unify (tFun t2 tv) t1
+    let sbst = mergeSubsts [tvSbst, s1, s2]
+    pure (apply sbst tv, sbst)
 
 
 infer :: Env -> Expr -> Either String Type
