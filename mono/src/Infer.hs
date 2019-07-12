@@ -35,8 +35,8 @@ unify (TVar tv)     t2            = bind tv t2
 unify t1            (TVar tv    ) = bind tv t1
 unify (TApp t1 t1') (TApp t2 t2') = do
   s1 <- unify t1 t2
-  s2 <- unify t1' t2'
-  pure $ mergeSubst s1 s2
+  s2 <- unify (apply s1 t1') (apply s1 t2')
+  pure $ mergeSubst s2 s1
 unify (TCon tc1) (TCon tc2) | tc1 == tc2 = pure []
 unify t1 t2               = lift . Left $ "types do not unify: " ++ show t1 ++ " and " ++ show t2
 
@@ -63,8 +63,9 @@ inferExpr env = \case
     (t1, s1) <- inferExpr env e1
     (t2, s2) <- inferExpr env e2
     tv <- freshTVar
-    sbst <- unify (tFun t2 tv) t1
-    pure (tv, mergeSubsts [sbst, s1, s2])
+    tvSbst <- unify (tFun t2 tv) t1
+    let sbst = mergeSubsts [tvSbst, s1, s2]
+    pure (apply sbst tv, sbst)
 
 
 infer :: Env -> Expr -> Either String Type
