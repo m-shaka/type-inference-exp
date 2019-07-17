@@ -11,7 +11,7 @@ import           Control.Monad.State
 import           Data.Foldable
 import           Data.List           (union, (\\))
 import           Data.Maybe          (fromJust)
-type Infer a = StateT Int (Either String) a
+type Infer a = StateT (Int, Subst) (Either String) a
 
 type Env = [(String, Scheme)]
 
@@ -28,9 +28,9 @@ instance FTV Scheme where
 
 freshTVar :: Infer Type
 freshTVar = do
-  s <- get
-  put $ s + 1
-  pure . TVar . TV $ letters !! s
+  (n, s) <- get
+  put (n + 1, s)
+  pure . TVar . TV $ letters !! n
   where
     letters = [1..] >>= flip replicateM ['a'..'z']
 
@@ -47,15 +47,21 @@ inst _  t          = t
 toScheme :: Type -> Scheme
 toScheme = Forall 0
 
-unify :: Type -> Type -> Infer Subst
-unify (TVar tv)     t2            = bind tv t2
-unify t1            (TVar tv    ) = bind tv t1
-unify (TApp t1 t1') (TApp t2 t2') = do
-  s1 <- unify t1 t2
-  s2 <- unify (apply s1 t1') (apply s1 t2')
+unify :: Type -> Type -> Infer ()
+unify t1 t2 = do
+  s <- getSubst
+  s' <- mgu (apply s t1) (apply s t2)
+  extSubst s'
+
+mgu :: Type -> Type -> Infer Subst
+mgu (TVar tv)     t2            = bind tv t2
+mgu t1            (TVar tv    ) = bind tv t1
+mgu (TApp t1 t1') (TApp t2 t2') = do
+  s1 <- mgu t1 t2
+  s2 <- mgu (apply s1 t1') (apply s1 t2')
   pure $ mergeSubst s2 s1
-unify (TCon tc1) (TCon tc2) | tc1 == tc2 = pure []
-unify t1 t2               = lift . Left $ "types do not unify: " ++ show t1 ++ " and " ++ show t2
+mgu (TCon tc1) (TCon tc2) | tc1 == tc2 = pure []
+mgu t1 t2               = lift . Left $ "types do not unify: " ++ show t1 ++ " and " ++ show t2
 
 bind :: TV -> Type -> Infer Subst
 bind u t | t == TVar u     = pure []
@@ -67,36 +73,40 @@ quantify vs t = Forall (length s) (apply s t)
  where vs' = [ v | v <- tvar t, v `elem` vs ]
        s = zip vs' (map TGen [0..])
 
-inferExpr :: Env -> Expr -> Infer (Type, Subst)
+getSubst :: Infer Subst
+getSubst = gets snd
+
+extSubst :: Subst -> Infer ()
+extSubst s = do
+  s' <- mergeSubst s <$> getSubst
+  modify $ \(n, _) -> (n, s')
+
+inferExpr :: Env -> Expr -> Infer Type
 inferExpr env = \case
-  Var v -> do
-    t <- freshInst . fromJust $ lookup v env
-    pure (t, [])
-  Int i -> pure (tInt, [])
-  Bool b -> pure (tBool, [])
+  Var v -> freshInst . fromJust $ lookup v env
+  Int i -> pure tInt
+  Bool b -> pure tBool
   Lam x e -> do
     targ <- freshTVar
-    (t1, s1) <- inferExpr ((x, toScheme targ) : env) e
-    pure (apply s1 $ tFun targ t1, s1)
+    t1 <- inferExpr ((x, toScheme targ) : env) e
+    pure $ tFun targ t1
   App e1 e2 -> do
-    (t1, s1) <- inferExpr env e1
-    (t2, s2) <- inferExpr env e2
+    t1 <- inferExpr env e1
+    t2 <- inferExpr env e2
     tv <- freshTVar
-    tvSbst <- unify (tFun t2 tv) t1
-    let sbst = mergeSubsts [tvSbst, s1, s2]
-    pure (apply sbst tv, sbst)
+    unify (tFun t2 tv) t1
+    pure tv
   BinOp _ e1 e2 -> do
-    (t1, s1) <- inferExpr env e1
-    (t2, s2) <- inferExpr env e2
-    s1' <- flip mergeSubst s1 <$> unify tInt t1
-    s2' <- flip mergeSubst s2 <$> unify tInt t2
-    pure (tInt, mergeSubsts [s2', s1'])
+    t1 <- inferExpr env e1
+    t2 <- inferExpr env e2
+    unify tInt t1
+    unify tInt t2
+    pure tInt
 
-inferBind :: Env -> Subst -> (Expr, Type) -> Infer Subst
-inferBind env s (expr, t) = do
-  (t', s') <- inferExpr env expr
-  s'' <- unify t' (apply s t)
-  pure (mergeSubsts [s'', s', s])
+inferBind :: Env -> Expr ->  Type -> Infer ()
+inferBind env expr t = do
+  t' <- inferExpr env expr
+  unify t t'
 
 inferBinds :: Env -> [BG.Bind] -> Infer Env
 inferBinds env binds = do
@@ -105,7 +115,8 @@ inferBinds env binds = do
       names = map fst binds
       tempEnv = zip names tempScs ++ env
       exprs = map snd binds
-  subst <- foldlM (inferBind tempEnv) nullSubst (zip exprs tempTs)
+  zipWithM_ (inferBind tempEnv) exprs tempTs
+  subst <- getSubst
   let ts = apply subst tempTs
       envFtvs = tvar =<< apply subst (fmap snd env)
       tsFtvs = join $ map tvar ts
@@ -124,4 +135,4 @@ inferBG :: Env -> BG.BindGroup -> Infer Env
 inferBG env bg = inferSeq env bg inferBinds
 
 infer :: Env -> BG.BindGroup -> Either String Env
-infer env bg = evalStateT (inferBG env bg) 0
+infer env bg = evalStateT (inferBG env bg) (0, nullSubst)
