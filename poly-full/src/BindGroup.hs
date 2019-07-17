@@ -35,11 +35,11 @@ depsEdge binds tenvNames = foldrM foldFunc [] binds
     lookupFv varName = case Map.lookup varName nameToIndex of
       Just i -> pure i
       _      -> throwError $ UndefinedVar varName
-    find (name, expr) = do
+    find b@(name, expr) = do
       let fv = E.fvars expr \\ tenvNames
           srcIndex = fromJust $ Map.lookup name nameToIndex
       deps <- traverse lookupFv fv
-      pure ((name, expr), srcIndex, deps)
+      pure (b, srcIndex, deps)
     foldFunc bind acc = do
       indices <- find bind
       pure $ indices : acc

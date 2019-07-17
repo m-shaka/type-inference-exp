@@ -74,11 +74,18 @@ inferExpr env = \case
     tvSbst <- unify (tFun t2 tv) t1
     let sbst = mergeSubsts [tvSbst, s1, s2]
     pure (apply sbst tv, sbst)
+  BinOp _ e1 e2 -> do
+    (t1, s1) <- inferExpr env e1
+    (t2, s2) <- inferExpr env e2
+    s1' <- unify tInt t1
+    s2' <- unify tInt t2
+    pure (tInt, mergeSubst s1' s2')
 
+inferSeq :: Env -> [a] -> (Env -> [a] -> Infer Env) -> Infer Env
+inferSeq env seq inferf = do
+  env' <- inferf env seq
+  pure (env' ++ env)
 
 infer :: Env -> Expr -> Either String Type
 infer env expr = (\(t, s) -> apply s t) <$> evalStateT (inferExpr env expr) 0
-
-infer' :: Env -> Expr -> Either String (Type, Subst)
-infer' env expr = evalStateT (inferExpr env expr) 0
 
