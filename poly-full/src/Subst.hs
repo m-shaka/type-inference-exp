@@ -12,11 +12,13 @@ instance Substitutable Type where
     Just t -> t
     _      -> TVar tv
   apply s (TApp t1 t2) = TApp (apply s t1) (apply s t2)
-  apply s t@TCon{} = t
-
+  apply _ t = t
 
 instance Substitutable Scheme where
   apply s (Forall n t) = Forall n $ apply s t
+
+instance Substitutable a => Substitutable [a] where
+  apply s = fmap (apply s)
 
 nullSubst :: Subst
 nullSubst = []
